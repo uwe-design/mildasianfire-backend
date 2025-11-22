@@ -5,6 +5,21 @@ import { pool } from './db.js';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// --- CORS erlauben (wichtig für Browser-Frontend) ---
+app.use((req, res, next) => {
+  // Für den Anfang: alles erlauben
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    // Preflight-Anfrage direkt beantworten
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// JSON-Body erlauben
 app.use(express.json());
 
 function toCents(amount) {
@@ -13,13 +28,25 @@ function toCents(amount) {
 }
 
 app.post('/orders', async (req, res) => {
+  if (!process.env.DATABASE_URL) {
+    console.error('POST /orders: DATABASE_URL ist nicht gesetzt.');
+    return res.status(500).json({ error: 'Server-Konfiguration fehlerhaft (DATABASE_URL fehlt).' });
+  }
+
   const order = req.body;
 
   if (!order || !order.customer || !Array.isArray(order.items) || order.items.length === 0) {
     return res.status(400).json({ error: 'Ungültige Bestellung' });
   }
 
-  const client = await pool.connect();
+  const client = await pool.connect().catch(err => {
+    console.error('Konnte keine DB-Verbindung herstellen:', err);
+    return null;
+  });
+
+  if (!client) {
+    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
+  }
 
   try {
     await client.query('BEGIN');
@@ -35,7 +62,7 @@ app.post('/orders', async (req, res) => {
       city
     } = order.customer;
 
-    // 1. Customer
+    // 1. Kunden anlegen oder wiederverwenden
     let customerId;
     const existingCustomer = await client.query(
       `SELECT id FROM customers WHERE LOWER(email) = LOWER($1) LIMIT 1`,
@@ -58,7 +85,7 @@ app.post('/orders', async (req, res) => {
       customerId = insertCustomer.rows[0].id;
     }
 
-    // 2. Orders
+    // 2. Bestellkopf
     const subtotalCents = toCents(order.subtotal);
     const shippingCents = toCents(order.shipping);
     const totalCents    = toCents(order.total);
@@ -79,7 +106,7 @@ app.post('/orders', async (req, res) => {
       RETURNING id
       `,
       [
-        order.id,            // deine yy-mm-dd-XXXX
+        order.id,
         customerId,
         'NEW',
         subtotalCents,
@@ -92,7 +119,7 @@ app.post('/orders', async (req, res) => {
 
     const orderId = insertOrder.rows[0].id;
 
-    // 3. Order Items
+    // 3. Positionen
     for (const item of order.items) {
       const { sku, name, qty, price } = item;
 
