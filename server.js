@@ -5,7 +5,7 @@ import { pool } from './db.js';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- CORS erlauben (wichtig für Browser-Frontend) ---
+// --- CORS erlauben (für dein Browser-Frontend/Admin) ---
 app.use((req, res, next) => {
   // Für den Anfang: alles erlauben
   res.header('Access-Control-Allow-Origin', '*');
@@ -27,6 +27,9 @@ function toCents(amount) {
   return Math.round(amount * 100);
 }
 
+// ---------------------------------------------
+// POST /orders – Bestellung speichern
+// ---------------------------------------------
 app.post('/orders', async (req, res) => {
   if (!process.env.DATABASE_URL) {
     console.error('POST /orders: DATABASE_URL ist nicht gesetzt.');
@@ -103,7 +106,7 @@ app.post('/orders', async (req, res) => {
         payment_status
       )
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      RETURNING id
+      RETURNING id, created_at
       `,
       [
         order.id,
@@ -183,6 +186,190 @@ app.post('/orders', async (req, res) => {
   }
 });
 
+// ---------------------------------------------
+// GET /orders – Liste der Bestellungen (für Admin)
+// ---------------------------------------------
+app.get('/orders', async (req, res) => {
+  if (!process.env.DATABASE_URL) {
+    console.error('GET /orders: DATABASE_URL ist nicht gesetzt.');
+    return res.status(500).json({ error: 'Server-Konfiguration fehlerhaft (DATABASE_URL fehlt).' });
+  }
+
+  const client = await pool.connect().catch(err => {
+    console.error('Konnte keine DB-Verbindung herstellen:', err);
+    return null;
+  });
+
+  if (!client) {
+    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
+  }
+
+  try {
+    // einfache Liste, neueste zuerst
+    const result = await client.query(
+      `
+      SELECT
+        o.id,
+        o.order_number,
+        o.created_at,
+        o.status,
+        o.total_cents,
+        c.first_name,
+        c.last_name,
+        c.email
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      ORDER BY o.created_at DESC
+      LIMIT 200
+      `
+    );
+
+    const orders = result.rows.map(row => ({
+      id: row.id,
+      orderNumber: row.order_number,
+      createdAt: row.created_at,
+      status: row.status,
+      totalCents: row.total_cents,
+      customer: {
+        firstName: row.first_name,
+        lastName: row.last_name,
+        email: row.email
+      }
+    }));
+
+    res.json({ orders });
+
+  } catch (err) {
+    console.error('Fehler beim Laden der Bestellungen:', err);
+    res.status(500).json({ error: 'Fehler beim Laden der Bestellungen' });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------------------------------------------
+// GET /orders/:id – Bestelldetails (Kopf + Kunde + Positionen)
+// ---------------------------------------------
+app.get('/orders/:id', async (req, res) => {
+  if (!process.env.DATABASE_URL) {
+    console.error('GET /orders/:id: DATABASE_URL ist nicht gesetzt.');
+    return res.status(500).json({ error: 'Server-Konfiguration fehlerhaft (DATABASE_URL fehlt).' });
+  }
+
+  const orderId = parseInt(req.params.id, 10);
+  if (Number.isNaN(orderId)) {
+    return res.status(400).json({ error: 'Ungültige Order-ID' });
+  }
+
+  const client = await pool.connect().catch(err => {
+    console.error('Konnte keine DB-Verbindung herstellen:', err);
+    return null;
+  });
+
+  if (!client) {
+    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
+  }
+
+  try {
+    // Kopf + Kunde
+    const orderRes = await client.query(
+      `
+      SELECT
+        o.id,
+        o.order_number,
+        o.created_at,
+        o.status,
+        o.subtotal_cents,
+        o.shipping_cents,
+        o.total_cents,
+        o.payment_method,
+        o.payment_status,
+        c.first_name,
+        c.last_name,
+        c.email,
+        c.phone,
+        c.street,
+        c.house_number,
+        c.zip_code,
+        c.city,
+        c.country
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      WHERE o.id = $1
+      LIMIT 1
+      `,
+      [orderId]
+    );
+
+    if (orderRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Bestellung nicht gefunden' });
+    }
+
+    const row = orderRes.rows[0];
+
+    const order = {
+      id: row.id,
+      orderNumber: row.order_number,
+      createdAt: row.created_at,
+      status: row.status,
+      subtotalCents: row.subtotal_cents,
+      shippingCents: row.shipping_cents,
+      totalCents: row.total_cents,
+      paymentMethod: row.payment_method,
+      paymentStatus: row.payment_status
+    };
+
+    const customer = {
+      firstName: row.first_name,
+      lastName: row.last_name,
+      email: row.email,
+      phone: row.phone,
+      street: row.street,
+      houseNumber: row.house_number,
+      zip: row.zip_code,
+      city: row.city,
+      country: row.country
+    };
+
+    // Positionen
+    const itemsRes = await client.query(
+      `
+      SELECT
+        id,
+        sku,
+        name,
+        qty,
+        unit_price_cents,
+        line_total_cents
+      FROM order_items
+      WHERE order_id = $1
+      ORDER BY id ASC
+      `,
+      [orderId]
+    );
+
+    const items = itemsRes.rows.map(r => ({
+      id: r.id,
+      sku: r.sku,
+      name: r.name,
+      qty: r.qty,
+      unitPriceCents: r.unit_price_cents,
+      lineTotalCents: r.line_total_cents
+    }));
+
+    res.json({ order, customer, items });
+
+  } catch (err) {
+    console.error('Fehler beim Laden der Bestelldetails:', err);
+    res.status(500).json({ error: 'Fehler beim Laden der Bestelldetails' });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------------------------------------------
+// Root
+// ---------------------------------------------
 app.get('/', (req, res) => {
   res.send('MildAsianFire API läuft');
 });
@@ -190,4 +377,5 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`MildAsianFire Backend läuft auf Port ${PORT}`);
 });
+
 
