@@ -53,7 +53,6 @@ app.post('/orders', async (req, res) => {
 
   try {
     await client.query('BEGIN');
-
     const {
       firstName,
       lastName,
@@ -93,6 +92,24 @@ app.post('/orders', async (req, res) => {
     const shippingCents = toCents(order.shipping);
     const totalCents    = toCents(order.total);
 
+    // Ordernummer im Backend generieren: YY-MM-DD-XXXX
+    async function generateOrderNumber(client) {
+      // Nächster Wert aus der Sequence
+      const seqRes = await client.query(`SELECT nextval('order_number_seq') AS seq`);
+      const seq = seqRes.rows[0].seq; // 1, 2, 3, ...
+
+      const now = new Date();
+      const yy = String(now.getFullYear()).slice(2);
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      const padded = String(seq).padStart(4, '0');
+
+      return `${yy}-${mm}-${dd}-${padded}`;
+    }
+
+    // NEU: Ordernummer im Backend generieren
+    const orderNumber = await generateOrderNumber(client);
+
     const insertOrder = await client.query(
       `
       INSERT INTO orders (
@@ -109,7 +126,7 @@ app.post('/orders', async (req, res) => {
       RETURNING id, created_at
       `,
       [
-        order.id,
+        orderNumber,   // ⬅ jetzt eigene, garantiert eindeutige Nummer
         customerId,
         'NEW',
         subtotalCents,
@@ -174,16 +191,20 @@ app.post('/orders', async (req, res) => {
     res.status(201).json({
       success: true,
       orderId,
-      orderNumber: order.id
+      orderNumber
     });
 
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('Fehler beim Speichern der Bestellung:', err);
-    res.status(500).json({ error: 'Fehler beim Speichern der Bestellung' });
-  } finally {
-    client.release();
+} catch (err) {
+  await client.query('ROLLBACK');
+  console.error('Fehler beim Speichern der Bestellung:', err);
+
+  if (err.code === '23505') {
+    // unique_violation, sollte jetzt eigentlich nicht mehr vorkommen
+    return res.status(409).json({ error: 'Ordernummer bereits vergeben' });
   }
+
+  res.status(500).json({ error: 'Fehler beim Speichern der Bestellung' });
+}
 });
 
 // ---------------------------------------------
