@@ -1,6 +1,7 @@
 // server.js
 import express from 'express';
 import { pool } from './db.js';
+import nodemailer from 'nodemailer';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,6 +29,147 @@ function toCents(amount) {
 }
 
 // ---------------------------------------------
+// Nodemailer-Transporter
+// ---------------------------------------------
+let mailTransporter = null;
+
+function getTransporter() {
+  if (mailTransporter) return mailTransporter;
+
+  const {
+    SMTP_HOST,
+    SMTP_PORT,
+    SMTP_USER,
+    SMTP_PASS
+  } = process.env;
+
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS) {
+    console.warn('Mailversand nicht konfiguriert (SMTP-ENV Variablen fehlen).');
+    return null;
+  }
+
+  mailTransporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: Number(SMTP_PORT),
+    secure: Number(SMTP_PORT) === 465, // 465 = SSL, sonst STARTTLS
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASS
+    }
+  });
+
+  return mailTransporter;
+}
+
+// ---------------------------------------------
+// Email-Helfer: Bestellbestätigung
+// ---------------------------------------------
+async function sendOrderEmails({ orderNumber, orderId, customer, items, totals }) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn('Kein Mail-Transporter konfiguriert, überspringe Mailversand.');
+    return;
+  }
+
+  const from = process.env.SMTP_FROM || 'MildAsianFire <no-reply@mildasianfire.de>';
+  const shopOwnerEmail = process.env.SHOP_OWNER_EMAIL || from;
+
+  const itemLines = items.map(it =>
+    `- ${it.qty}× ${it.name} (SKU: ${it.sku}) – ${ (it.price || 0).toFixed(2).replace('.', ',') } €`
+  ).join('\n');
+
+  const subtotalText = (totals.subtotal || 0).toFixed(2).replace('.', ',') + ' €';
+  const shippingText = (totals.shipping || 0).toFixed(2).replace('.', ',') + ' €';
+  const totalText    = (totals.total || 0).toFixed(2).replace('.', ',') + ' €';
+
+  const addressLines = [
+    `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+    `${customer.street || ''} ${customer.house || ''}`.trim(),
+    `${customer.zip || ''} ${customer.city || ''}`.trim()
+  ].filter(Boolean).join('\n');
+
+  const subjectCustomer = `Deine Bestellung bei MildAsianFire (#${orderNumber})`;
+  const subjectOwner    = `Neue Bestellung #${orderNumber} – MildAsianFire`;
+
+  const textBodyCustomer = `
+Hallo ${customer.firstName || ''},
+
+vielen Dank für deine Bestellung bei MildAsianFire!
+
+Bestellnummer: ${orderNumber}
+Interne ID: ${orderId}
+
+Rechnungs-/Lieferadresse:
+${addressLines || '-'}
+
+Bestellte Artikel:
+${itemLines || '-'}
+
+Zwischensumme: ${subtotalText}
+Versand:       ${shippingText}
+--------------------------
+Gesamt:        ${totalText}
+
+Du erhältst eine weitere Nachricht, sobald deine Bestellung versendet wurde.
+
+Feurige Grüße
+MildAsianFire
+`.trim();
+
+  const textBodyOwner = `
+Neue Bestellung bei MildAsianFire:
+
+Bestellnummer: ${orderNumber}
+Interne ID: ${orderId}
+
+Kunde:
+${addressLines || '-'}
+E-Mail: ${customer.email || '-'}
+
+Artikel:
+${itemLines || '-'}
+
+Zwischensumme: ${subtotalText}
+Versand:       ${shippingText}
+Gesamt:        ${totalText}
+`.trim();
+
+  const mailPromises = [];
+
+  // an Kunde, falls Email vorhanden
+  if (customer.email) {
+    mailPromises.push(
+      transporter.sendMail({
+        from,
+        to: customer.email,
+        subject: subjectCustomer,
+        text: textBodyCustomer
+      })
+    );
+  }
+
+  // Kopie an Shop-Betreiber
+  if (shopOwnerEmail) {
+    mailPromises.push(
+      transporter.sendMail({
+        from,
+        to: shopOwnerEmail,
+        subject: subjectOwner,
+        text: textBodyOwner
+      })
+    );
+  }
+
+  try {
+    await Promise.all(mailPromises);
+    console.log('Bestellbestätigungs-Mails erfolgreich gesendet für Order', orderNumber);
+  } catch (err) {
+    console.error('Fehler beim Senden der Bestellbestätigungs-Mail:', err);
+    // aber: Bestellung bleibt gültig, wir werfen hier NICHT weiter
+  }
+}
+
+// ---------------------------------------------
 // Helper: Ordernummer im Backend generieren: YY-MM-DD-XXXX
 // ---------------------------------------------
 async function generateOrderNumber(client) {
@@ -45,7 +187,7 @@ async function generateOrderNumber(client) {
 }
 
 // ---------------------------------------------
-// POST /orders – Bestellung speichern + Lagerbestand prüfen/aktualisieren
+// POST /orders – Bestellung speichern + Lagerbestand prüfen/aktualisieren + Mails
 // ---------------------------------------------
 app.post('/orders', async (req, res) => {
   if (!process.env.DATABASE_URL) {
@@ -143,6 +285,8 @@ app.post('/orders', async (req, res) => {
     const orderId = insertOrder.rows[0].id;
 
     // 3. Positionen + Lagerbestand prüfen/aktualisieren
+    const itemsForMail = [];
+
     for (const item of order.items) {
       const { sku, name, qty, price } = item;
 
@@ -217,14 +361,41 @@ app.post('/orders', async (req, res) => {
           lineTotalCents
         ]
       );
+
+      itemsForMail.push({ sku, name, qty, price });
     }
 
     await client.query('COMMIT');
 
+    // Antwort an Frontend
     res.status(201).json({
       success: true,
       orderId,
       orderNumber
+    });
+
+    // Bestätigungsmails asynchron (Fehler brechen Bestellung NICHT ab)
+    sendOrderEmails({
+      orderNumber,
+      orderId,
+      customer: {
+        firstName,
+        lastName,
+        email,
+        phone,
+        street,
+        house,
+        zip,
+        city
+      },
+      items: itemsForMail,
+      totals: {
+        subtotal: order.subtotal,
+        shipping: order.shipping,
+        total: order.total
+      }
+    }).catch(err => {
+      console.error('Fehler im sendOrderEmails-Aufruf:', err);
     });
 
   } catch (err) {
@@ -568,6 +739,3 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`MildAsianFire Backend läuft auf Port ${PORT}`);
 });
-
-
-
