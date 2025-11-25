@@ -248,6 +248,136 @@ app.post('/orders', async (req, res) => {
 });
 
 // ---------------------------------------------
+// GET /products – Produkte + Lagerbestand (für Admin)
+// Optional: ?search=... (SKU oder Name enthält)
+// ---------------------------------------------
+app.get('/products', async (req, res) => {
+  if (!process.env.DATABASE_URL) {
+    console.error('GET /products: DATABASE_URL ist nicht gesetzt.');
+    return res.status(500).json({ error: 'Server-Konfiguration fehlerhaft (DATABASE_URL fehlt).' });
+  }
+
+  const search = (req.query.search || '').trim();
+
+  const client = await pool.connect().catch(err => {
+    console.error('Konnte keine DB-Verbindung herstellen:', err);
+    return null;
+  });
+
+  if (!client) {
+    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
+  }
+
+  try {
+    let result;
+    if (search) {
+      const like = `%${search.toLowerCase()}%`;
+      result = await client.query(
+        `
+        SELECT id, sku, name, stock_qty
+        FROM products
+        WHERE LOWER(sku) LIKE $1
+           OR LOWER(name) LIKE $1
+        ORDER BY sku ASC
+        LIMIT 200
+        `,
+        [like]
+      );
+    } else {
+      result = await client.query(
+        `
+        SELECT id, sku, name, stock_qty
+        FROM products
+        ORDER BY sku ASC
+        LIMIT 200
+        `
+      );
+    }
+
+    const products = result.rows.map(row => ({
+      id: row.id,
+      sku: row.sku,
+      name: row.name,
+      stockQty: row.stock_qty
+    }));
+
+    res.json({ products });
+
+  } catch (err) {
+    console.error('Fehler beim Laden der Produkte:', err);
+    res.status(500).json({ error: 'Fehler beim Laden der Produkte' });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------------------------------------------
+// POST /products/:id/stock – Lagerbestand setzen
+// Body: { stockQty: number } – absoluter Wert
+// ---------------------------------------------
+app.post('/products/:id/stock', async (req, res) => {
+  if (!process.env.DATABASE_URL) {
+    console.error('POST /products/:id/stock: DATABASE_URL ist nicht gesetzt.');
+    return res.status(500).json({ error: 'Server-Konfiguration fehlerhaft (DATABASE_URL fehlt).' });
+  }
+
+  const productId = parseInt(req.params.id, 10);
+  if (Number.isNaN(productId)) {
+    return res.status(400).json({ error: 'Ungültige Produkt-ID' });
+  }
+
+  const { stockQty } = req.body;
+  const parsedStock = Number(stockQty);
+
+  if (!Number.isFinite(parsedStock) || parsedStock < 0) {
+    return res.status(400).json({ error: 'Ungültiger Lagerbestand (muss eine Zahl >= 0 sein).' });
+  }
+
+  const client = await pool.connect().catch(err => {
+    console.error('Konnte keine DB-Verbindung herstellen:', err);
+    return null;
+  });
+
+  if (!client) {
+    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
+  }
+
+  try {
+    const result = await client.query(
+      `
+      UPDATE products
+      SET stock_qty = $1
+      WHERE id = $2
+      RETURNING id, sku, name, stock_qty
+      `,
+      [parsedStock, productId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Produkt nicht gefunden' });
+    }
+
+    const row = result.rows[0];
+
+    res.json({
+      success: true,
+      product: {
+        id: row.id,
+        sku: row.sku,
+        name: row.name,
+        stockQty: row.stock_qty
+      }
+    });
+
+  } catch (err) {
+    console.error('Fehler beim Aktualisieren des Lagerbestands:', err);
+    res.status(500).json({ error: 'Fehler beim Aktualisieren des Lagerbestands' });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------------------------------------------
 // GET /orders – Liste der Bestellungen (für Admin)
 // ---------------------------------------------
 app.get('/orders', async (req, res) => {
@@ -438,5 +568,6 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`MildAsianFire Backend läuft auf Port ${PORT}`);
 });
+
 
 
