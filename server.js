@@ -28,7 +28,24 @@ function toCents(amount) {
 }
 
 // ---------------------------------------------
-// POST /orders – Bestellung speichern
+// Helper: Ordernummer im Backend generieren: YY-MM-DD-XXXX
+// ---------------------------------------------
+async function generateOrderNumber(client) {
+  // Nächster Wert aus der Sequence
+  const seqRes = await client.query(`SELECT nextval('order_number_seq') AS seq`);
+  const seq = seqRes.rows[0].seq; // 1, 2, 3, ...
+
+  const now = new Date();
+  const yy = String(now.getFullYear()).slice(2);
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const padded = String(seq).padStart(4, '0');
+
+  return `${yy}-${mm}-${dd}-${padded}`;
+}
+
+// ---------------------------------------------
+// POST /orders – Bestellung speichern + Lagerbestand prüfen/aktualisieren
 // ---------------------------------------------
 app.post('/orders', async (req, res) => {
   if (!process.env.DATABASE_URL) {
@@ -53,6 +70,7 @@ app.post('/orders', async (req, res) => {
 
   try {
     await client.query('BEGIN');
+
     const {
       firstName,
       lastName,
@@ -92,22 +110,7 @@ app.post('/orders', async (req, res) => {
     const shippingCents = toCents(order.shipping);
     const totalCents    = toCents(order.total);
 
-    // Ordernummer im Backend generieren: YY-MM-DD-XXXX
-    async function generateOrderNumber(client) {
-      // Nächster Wert aus der Sequence
-      const seqRes = await client.query(`SELECT nextval('order_number_seq') AS seq`);
-      const seq = seqRes.rows[0].seq; // 1, 2, 3, ...
-
-      const now = new Date();
-      const yy = String(now.getFullYear()).slice(2);
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const dd = String(now.getDate()).padStart(2, '0');
-      const padded = String(seq).padStart(4, '0');
-
-      return `${yy}-${mm}-${dd}-${padded}`;
-    }
-
-    // NEU: Ordernummer im Backend generieren
+    // Ordernummer im Backend generieren
     const orderNumber = await generateOrderNumber(client);
 
     const insertOrder = await client.query(
@@ -126,7 +129,7 @@ app.post('/orders', async (req, res) => {
       RETURNING id, created_at
       `,
       [
-        orderNumber,   // ⬅ jetzt eigene, garantiert eindeutige Nummer
+        orderNumber,
         customerId,
         'NEW',
         subtotalCents,
@@ -139,25 +142,55 @@ app.post('/orders', async (req, res) => {
 
     const orderId = insertOrder.rows[0].id;
 
-    // 3. Positionen
+    // 3. Positionen + Lagerbestand prüfen/aktualisieren
     for (const item of order.items) {
       const { sku, name, qty, price } = item;
 
       if (!sku || !name || !qty || !price) {
-        throw new Error('Ungültige Position in Bestellung');
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Ungültige Position in Bestellung (SKU/Name/Menge/Preis fehlt).' });
       }
 
+      // Produkt mit FOR UPDATE holen → schützt vor Race Conditions
       const productRes = await client.query(
-        `SELECT id FROM products WHERE sku = $1`,
+        `
+        SELECT id, stock_qty
+        FROM products
+        WHERE sku = $1
+        FOR UPDATE
+        `,
         [sku]
       );
 
       if (productRes.rows.length === 0) {
-        throw new Error(`Produkt mit SKU ${sku} nicht gefunden`);
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Produkt mit SKU ${sku} nicht gefunden` });
       }
 
-      const productId = productRes.rows[0].id;
+      const productRow   = productRes.rows[0];
+      const productId    = productRow.id;
+      const currentStock = productRow.stock_qty ?? 0;
 
+      // Lager prüfen
+      if (currentStock < qty) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          error: `Nicht genügend Lagerbestand für ${name} (SKU ${sku}). Verfügbar: ${currentStock}, angefragt: ${qty}.`
+        });
+      }
+
+      // Lagerbestand reduzieren
+      const newStock = currentStock - qty;
+      await client.query(
+        `
+        UPDATE products
+        SET stock_qty = $1
+        WHERE id = $2
+        `,
+        [newStock, productId]
+      );
+
+      // Bestellposition speichern
       const unitPriceCents = toCents(price);
       const lineTotalCents = toCents(price * qty);
 
@@ -194,17 +227,24 @@ app.post('/orders', async (req, res) => {
       orderNumber
     });
 
-} catch (err) {
-  await client.query('ROLLBACK');
-  console.error('Fehler beim Speichern der Bestellung:', err);
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      console.error('Rollback-Fehler:', rollbackErr);
+    }
 
-  if (err.code === '23505') {
-    // unique_violation, sollte jetzt eigentlich nicht mehr vorkommen
-    return res.status(409).json({ error: 'Ordernummer bereits vergeben' });
+    console.error('Fehler beim Speichern der Bestellung:', err);
+
+    if (err.code === '23505') {
+      // unique_violation (z.B. order_number doppelt)
+      return res.status(409).json({ error: 'Ordernummer bereits vergeben' });
+    }
+
+    res.status(500).json({ error: 'Fehler beim Speichern der Bestellung' });
+  } finally {
+    client.release();
   }
-
-  res.status(500).json({ error: 'Fehler beim Speichern der Bestellung' });
-}
 });
 
 // ---------------------------------------------
