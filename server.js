@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use((req, res, next) => {
   // Für den Anfang: alles erlauben
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
@@ -617,6 +617,67 @@ app.get('/orders/:id', async (req, res) => {
     console.error('GET /orders/:id: DATABASE_URL ist nicht gesetzt.');
     return res.status(500).json({ error: 'Server-Konfiguration fehlerhaft (DATABASE_URL fehlt).' });
   }
+  
+  // ---------------------------------------------
+// PATCH /orders/:id/status – Bestellstatus ändern
+// Body: { status: "DONE" }
+// ---------------------------------------------
+app.patch('/orders/:id/status', async (req, res) => {
+  const orderId = Number(req.params.id);
+  const newStatus = (req.body?.status || '').trim().toUpperCase();
+
+  if (!orderId || Number.isNaN(orderId)) {
+    return res.status(400).json({ error: 'Ungültige Order-ID' });
+  }
+
+  // Nur erlaubte Status
+  const allowed = ['NEW', 'DONE'];
+  if (!allowed.includes(newStatus)) {
+    return res.status(400).json({
+      error: `Ungültiger Status. Erlaubt: ${allowed.join(', ')}`
+    });
+  }
+
+  const client = await pool.connect().catch((err) => {
+    console.error('PATCH /orders/:id/status – DB Fehler:', err);
+    return null;
+  });
+
+  if (!client) {
+    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
+  }
+
+  try {
+    const update = await client.query(
+      `
+      UPDATE orders
+      SET status = $1
+      WHERE id = $2
+      RETURNING id, order_number, status
+      `,
+      [newStatus, orderId]
+    );
+
+    if (update.rows.length === 0) {
+      return res.status(404).json({ error: 'Bestellung nicht gefunden' });
+    }
+
+    const row = update.rows[0];
+
+    res.json({
+      success: true,
+      id: row.id,
+      orderNumber: row.order_number,
+      status: row.status
+    });
+
+  } catch (err) {
+    console.error('Fehler beim Aktualisieren des Status:', err);
+    res.status(500).json({ error: 'Fehler beim Aktualisieren des Status' });
+  } finally {
+    client.release();
+  }
+});
 
   const orderId = parseInt(req.params.id, 10);
   if (Number.isNaN(orderId)) {
