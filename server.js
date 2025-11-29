@@ -625,6 +625,68 @@ app.get('/orders/:id', async (req, res) => {
 app.patch('/orders/:id/status', async (req, res) => {
   const orderId = Number(req.params.id);
   const newStatus = (req.body?.status || '').trim().toUpperCase();
+  
+  // ---------------------------------------------
+// PATCH /orders/:id/payment – Zahlungsstatus ändern
+// Body: { paymentStatus: "PAID" }
+// ---------------------------------------------
+app.patch('/orders/:id/payment', async (req, res) => {
+  const orderId = Number(req.params.id);
+  const newPaymentStatus = (req.body?.paymentStatus || '').trim().toUpperCase();
+
+  if (!orderId || Number.isNaN(orderId)) {
+    return res.status(400).json({ error: 'Ungültige Order-ID' });
+  }
+
+  // Erlaubte Payment-Status (kannst du später erweitern)
+  const allowed = ['OPEN', 'PAID', 'FAILED', 'REFUNDED'];
+  if (!allowed.includes(newPaymentStatus)) {
+    return res.status(400).json({
+      error: `Ungültiger Zahlungsstatus. Erlaubt: ${allowed.join(', ')}`
+    });
+  }
+
+  const client = await pool.connect().catch((err) => {
+    console.error('PATCH /orders/:id/payment – DB Fehler:', err);
+    return null;
+  });
+
+  if (!client) {
+    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
+  }
+
+  try {
+    const update = await client.query(
+      `
+      UPDATE orders
+      SET payment_status = $1
+      WHERE id = $2
+      RETURNING id, order_number, payment_status
+      `,
+      [newPaymentStatus, orderId]
+    );
+
+    if (update.rows.length === 0) {
+      return res.status(404).json({ error: 'Bestellung nicht gefunden' });
+    }
+
+    const row = update.rows[0];
+
+    res.json({
+      success: true,
+      id: row.id,
+      orderNumber: row.order_number,
+      paymentStatus: row.payment_status
+    });
+
+  } catch (err) {
+    console.error('Fehler beim Aktualisieren des Zahlungsstatus:', err);
+    res.status(500).json({ error: 'Fehler beim Aktualisieren des Zahlungsstatus' });
+  } finally {
+    client.release();
+  }
+});
+
 
   if (!orderId || Number.isNaN(orderId)) {
     return res.status(400).json({ error: 'Ungültige Order-ID' });
