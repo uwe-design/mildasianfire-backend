@@ -576,6 +576,7 @@ app.get('/orders', async (req, res) => {
         o.created_at,
         o.status,
         o.total_cents,
+        o.payment_status,
         c.first_name,
         c.last_name,
         c.email
@@ -592,6 +593,7 @@ app.get('/orders', async (req, res) => {
       createdAt: row.created_at,
       status: row.status,
       totalCents: row.total_cents,
+      paymentStatus: row.payment_status,
       customer: {
         firstName: row.first_name,
         lastName: row.last_name,
@@ -617,129 +619,6 @@ app.get('/orders/:id', async (req, res) => {
     console.error('GET /orders/:id: DATABASE_URL ist nicht gesetzt.');
     return res.status(500).json({ error: 'Server-Konfiguration fehlerhaft (DATABASE_URL fehlt).' });
   }
-  
-  // ---------------------------------------------
-// PATCH /orders/:id/status – Bestellstatus ändern
-// Body: { status: "DONE" }
-// ---------------------------------------------
-app.patch('/orders/:id/status', async (req, res) => {
-  const orderId = Number(req.params.id);
-  const newStatus = (req.body?.status || '').trim().toUpperCase();
-  
-  // ---------------------------------------------
-// PATCH /orders/:id/payment – Zahlungsstatus ändern
-// Body: { paymentStatus: "PAID" }
-// ---------------------------------------------
-app.patch('/orders/:id/payment', async (req, res) => {
-  const orderId = Number(req.params.id);
-  const newPaymentStatus = (req.body?.paymentStatus || '').trim().toUpperCase();
-
-  if (!orderId || Number.isNaN(orderId)) {
-    return res.status(400).json({ error: 'Ungültige Order-ID' });
-  }
-
-  // Erlaubte Payment-Status (kannst du später erweitern)
-  const allowed = ['OPEN', 'PAID', 'FAILED', 'REFUNDED'];
-  if (!allowed.includes(newPaymentStatus)) {
-    return res.status(400).json({
-      error: `Ungültiger Zahlungsstatus. Erlaubt: ${allowed.join(', ')}`
-    });
-  }
-
-  const client = await pool.connect().catch((err) => {
-    console.error('PATCH /orders/:id/payment – DB Fehler:', err);
-    return null;
-  });
-
-  if (!client) {
-    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
-  }
-
-  try {
-    const update = await client.query(
-      `
-      UPDATE orders
-      SET payment_status = $1
-      WHERE id = $2
-      RETURNING id, order_number, payment_status
-      `,
-      [newPaymentStatus, orderId]
-    );
-
-    if (update.rows.length === 0) {
-      return res.status(404).json({ error: 'Bestellung nicht gefunden' });
-    }
-
-    const row = update.rows[0];
-
-    res.json({
-      success: true,
-      id: row.id,
-      orderNumber: row.order_number,
-      paymentStatus: row.payment_status
-    });
-
-  } catch (err) {
-    console.error('Fehler beim Aktualisieren des Zahlungsstatus:', err);
-    res.status(500).json({ error: 'Fehler beim Aktualisieren des Zahlungsstatus' });
-  } finally {
-    client.release();
-  }
-});
-
-
-  if (!orderId || Number.isNaN(orderId)) {
-    return res.status(400).json({ error: 'Ungültige Order-ID' });
-  }
-
-  // Nur erlaubte Status
-  const allowed = ['NEW', 'DONE'];
-  if (!allowed.includes(newStatus)) {
-    return res.status(400).json({
-      error: `Ungültiger Status. Erlaubt: ${allowed.join(', ')}`
-    });
-  }
-
-  const client = await pool.connect().catch((err) => {
-    console.error('PATCH /orders/:id/status – DB Fehler:', err);
-    return null;
-  });
-
-  if (!client) {
-    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
-  }
-
-  try {
-    const update = await client.query(
-      `
-      UPDATE orders
-      SET status = $1
-      WHERE id = $2
-      RETURNING id, order_number, status
-      `,
-      [newStatus, orderId]
-    );
-
-    if (update.rows.length === 0) {
-      return res.status(404).json({ error: 'Bestellung nicht gefunden' });
-    }
-
-    const row = update.rows[0];
-
-    res.json({
-      success: true,
-      id: row.id,
-      orderNumber: row.order_number,
-      status: row.status
-    });
-
-  } catch (err) {
-    console.error('Fehler beim Aktualisieren des Status:', err);
-    res.status(500).json({ error: 'Fehler beim Aktualisieren des Status' });
-  } finally {
-    client.release();
-  }
-});
 
   const orderId = parseInt(req.params.id, 10);
   if (Number.isNaN(orderId)) {
@@ -847,6 +726,128 @@ app.patch('/orders/:id/payment', async (req, res) => {
   } catch (err) {
     console.error('Fehler beim Laden der Bestelldetails:', err);
     res.status(500).json({ error: 'Fehler beim Laden der Bestelldetails' });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------------------------------------------
+// PATCH /orders/:id/status – Bestellstatus ändern
+// Body: { status: "DONE" }
+// ---------------------------------------------
+app.patch('/orders/:id/status', async (req, res) => {
+  const orderId = Number(req.params.id);
+  const newStatus = (req.body?.status || '').trim().toUpperCase();
+
+  if (!orderId || Number.isNaN(orderId)) {
+    return res.status(400).json({ error: 'Ungültige Order-ID' });
+  }
+
+  // Nur erlaubte Status
+  const allowed = ['NEW', 'DONE'];
+  if (!allowed.includes(newStatus)) {
+    return res.status(400).json({
+      error: `Ungültiger Status. Erlaubt: ${allowed.join(', ')}`
+    });
+  }
+
+  const client = await pool.connect().catch((err) => {
+    console.error('PATCH /orders/:id/status – DB Fehler:', err);
+    return null;
+  });
+
+  if (!client) {
+    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
+  }
+
+  try {
+    const update = await client.query(
+      `
+      UPDATE orders
+      SET status = $1
+      WHERE id = $2
+      RETURNING id, order_number, status
+      `,
+      [newStatus, orderId]
+    );
+
+    if (update.rows.length === 0) {
+      return res.status(404).json({ error: 'Bestellung nicht gefunden' });
+    }
+
+    const row = update.rows[0];
+
+    res.json({
+      success: true,
+      id: row.id,
+      orderNumber: row.order_number,
+      status: row.status
+    });
+
+  } catch (err) {
+    console.error('Fehler beim Aktualisieren des Status:', err);
+    res.status(500).json({ error: 'Fehler beim Aktualisieren des Status' });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------------------------------------------
+// PATCH /orders/:id/payment – Zahlungsstatus ändern
+// Body: { paymentStatus: "PAID" }
+// ---------------------------------------------
+app.patch('/orders/:id/payment', async (req, res) => {
+  const orderId = Number(req.params.id);
+  const newPaymentStatus = (req.body?.paymentStatus || '').trim().toUpperCase();
+
+  if (!orderId || Number.isNaN(orderId)) {
+    return res.status(400).json({ error: 'Ungültige Order-ID' });
+  }
+
+  // Erlaubte Payment-Status (kannst du später erweitern)
+  const allowed = ['OPEN', 'PAID', 'FAILED', 'REFUNDED'];
+  if (!allowed.includes(newPaymentStatus)) {
+    return res.status(400).json({
+      error: `Ungültiger Zahlungsstatus. Erlaubt: ${allowed.join(', ')}`
+    });
+  }
+
+  const client = await pool.connect().catch((err) => {
+    console.error('PATCH /orders/:id/payment – DB Fehler:', err);
+    return null;
+  });
+
+  if (!client) {
+    return res.status(500).json({ error: 'Datenbank nicht erreichbar.' });
+  }
+
+  try {
+    const update = await client.query(
+      `
+      UPDATE orders
+      SET payment_status = $1
+      WHERE id = $2
+      RETURNING id, order_number, payment_status
+      `,
+      [newPaymentStatus, orderId]
+    );
+
+    if (update.rows.length === 0) {
+      return res.status(404).json({ error: 'Bestellung nicht gefunden' });
+    }
+
+    const row = update.rows[0];
+
+    res.json({
+      success: true,
+      id: row.id,
+      orderNumber: row.order_number,
+      paymentStatus: row.payment_status
+    });
+
+  } catch (err) {
+    console.error('Fehler beim Aktualisieren des Zahlungsstatus:', err);
+    res.status(500).json({ error: 'Fehler beim Aktualisieren des Zahlungsstatus' });
   } finally {
     client.release();
   }
