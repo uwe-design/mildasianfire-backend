@@ -29,37 +29,31 @@ function toCents(amount) {
 }
 
 // ---------------------------------------------
-// Nodemailer-Transporter
+// Nodemailer-Transporter (SendGrid via API)
 // ---------------------------------------------
 let mailTransporter = null;
 
 function getTransporter() {
   if (mailTransporter) return mailTransporter;
 
-  const {
-    SMTP_HOST,
-    SMTP_PORT,
-    SMTP_USER,
-    SMTP_PASS
-  } = process.env;
+  const { SENDGRID_API_KEY } = process.env;
 
-  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS) {
-    console.warn('Mailversand nicht konfiguriert (SMTP-ENV Variablen fehlen).');
+  if (!SENDGRID_API_KEY) {
+    console.warn('Mailversand nicht konfiguriert (SENDGRID_API_KEY fehlt).');
     return null;
   }
 
   mailTransporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: Number(SMTP_PORT),
-    secure: Number(SMTP_PORT) === 465, // 465 = SSL, sonst STARTTLS
+    service: 'SendGrid',
     auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS
+      user: 'apikey',
+      pass: SENDGRID_API_KEY
     }
   });
 
   return mailTransporter;
 }
+
 
 // ---------------------------------------------
 // Email-Helfer: Bestellbestätigung
