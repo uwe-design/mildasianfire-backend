@@ -162,53 +162,53 @@ async function sendOrderEmails({ orderNumber, orderId, orderDate, customer, item
   // -------------------------------------------------------
   // 2) Optionale Text-Mail an Shop-Betreiber via Nodemailer
   // -------------------------------------------------------
-  const transporter = getTransporter();
-  if (transporter && shopOwnerEmail) {
-    const itemLines = items.map(it =>
-      `- ${it.qty}× ${it.name} (SKU: ${it.sku}) – ${(it.price || 0).toFixed(2).replace('.', ',')} €`
-    ).join('\n');
+//  const transporter = getTransporter();
+//  if (transporter && shopOwnerEmail) {
+//    const itemLines = items.map(it =>
+//      `- ${it.qty}× ${it.name} (SKU: ${it.sku}) – ${(it.price || 0).toFixed(2).replace('.', ',')} €`
+//    ).join('\n');
 
-    const subtotalText = (totals.subtotal || 0).toFixed(2).replace('.', ',') + ' €';
-    const shippingText = (totals.shipping || 0).toFixed(2).replace('.', ',') + ' €';
-    const totalText    = (totals.total || 0).toFixed(2).replace('.', ',') + ' €';
+//    const subtotalText = (totals.subtotal || 0).toFixed(2).replace('.', ',') + ' €';
+//    const shippingText = (totals.shipping || 0).toFixed(2).replace('.', ',') + ' €';
+//    const totalText    = (totals.total || 0).toFixed(2).replace('.', ',') + ' €';
 
-    const addressLines = [
-      `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
-      `${customer.street || ''} ${customer.house || ''}`.trim(),
-      `${customer.zip || ''} ${customer.city || ''}`.trim()
-    ].filter(Boolean).join('\n');
+//    const addressLines = [
+//      `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+//      `${customer.street || ''} ${customer.house || ''}`.trim(),
+//      `${customer.zip || ''} ${customer.city || ''}`.trim()
+//    ].filter(Boolean).join('\n');
 
-    const subjectOwner = `Neue Bestellung #${orderNumber} – MildAsianFire`;
+//    const subjectOwner = `Neue Bestellung #${orderNumber} – MildAsianFire`;
 
-    const textBodyOwner = `
-Neue Bestellung bei MildAsianFire:
+//    const textBodyOwner = `
+//Neue Bestellung bei MildAsianFire:
 
-Bestellnummer: ${orderNumber}
-Interne ID: ${orderId}
+//Bestellnummer: ${orderNumber}
+//Interne ID: ${orderId}
 
-Kunde:
-${addressLines || '-'}
-E-Mail: ${customer.email || '-'}
+//Kunde:
+//${addressLines || '-'}
+//E-Mail: ${customer.email || '-'}
 
-Artikel:
-${itemLines || '-'}
+//Artikel:
+//${itemLines || '-'}
 
-Zwischensumme: ${subtotalText}
-Versand:       ${shippingText}
-Gesamt:        ${totalText}
-    `.trim();
+//Zwischensumme: ${subtotalText}
+//Versand:       ${shippingText}
+//Gesamt:        ${totalText}
+//    `.trim();
 
-    mailPromises.push(
-      transporter.sendMail({
-        from,
-        to: shopOwnerEmail,
-        subject: subjectOwner,
-        text: textBodyOwner
-      })
-    );
-  } else {
-    console.warn('Shop-Owner-Mail nicht gesendet (kein Transporter oder keine SHOP_OWNER_EMAIL).');
-  }
+//    mailPromises.push(
+//      transporter.sendMail({
+//        from,
+//        to: shopOwnerEmail,
+//        subject: subjectOwner,
+//        text: textBodyOwner
+//      })
+//    );
+//  } else {
+//    console.warn('Shop-Owner-Mail nicht gesendet (kein Transporter oder keine SHOP_OWNER_EMAIL).');
+//  }
 
   // ---------------------------------
   // Mails wirklich senden
