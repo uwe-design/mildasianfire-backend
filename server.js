@@ -7,7 +7,12 @@ import sgMail from '@sendgrid/mail';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// SendGrid API Key setzen (für Dynamic Template)
+if (!process.env.SENDGRID_API_KEY) {
+  console.warn('WARNUNG: SENDGRID_API_KEY ist nicht gesetzt – Kunden-Mail per Template ist deaktiviert.');
+} else {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+}
 
 // --- CORS erlauben (für dein Browser-Frontend/Admin) ---
 app.use((req, res, next) => {
@@ -32,7 +37,7 @@ function toCents(amount) {
 }
 
 // ---------------------------------------------
-// Nodemailer-Transporter (SendGrid via API)
+// Nodemailer-Transporter (für Shop-Owner-Mail)
 // ---------------------------------------------
 let mailTransporter = null;
 
@@ -42,7 +47,7 @@ function getTransporter() {
   const { SENDGRID_API_KEY } = process.env;
 
   if (!SENDGRID_API_KEY) {
-    console.warn('Mailversand nicht konfiguriert (SENDGRID_API_KEY fehlt).');
+    console.warn('Mailversand für Shop-Owner nicht konfiguriert (SENDGRID_API_KEY fehlt).');
     return null;
   }
 
@@ -59,60 +64,122 @@ function getTransporter() {
 
 // ---------------------------------------------
 // Email-Helfer: Bestellbestätigung
+// - Kunde: SendGrid Dynamic Template (sgMail)
+// - Shop-Owner: Text-Mail via Nodemailer
 // ---------------------------------------------
-async function sendOrderEmails({ orderNumber, orderId, customer, items, totals }) {
-  const transporter = getTransporter();
-  if (!transporter) {
-    console.warn('Kein Mail-Transporter konfiguriert, überspringe Mailversand.');
-    return;
-  }
-
+async function sendOrderEmails({ orderNumber, orderId, orderDate, customer, items, totals }) {
   const from = process.env.SMTP_FROM || 'MildAsianFire <no-reply@mildasianfire.de>';
   const shopOwnerEmail = process.env.SHOP_OWNER_EMAIL || from;
 
-  const itemLines = items.map(it =>
-    `- ${it.qty}× ${it.name} (SKU: ${it.sku}) – ${ (it.price || 0).toFixed(2).replace('.', ',') } €`
-  ).join('\n');
+  // ---------------------------------
+  // Hilfsfunktionen nur für diese Mail
+  // ---------------------------------
+  function formatCurrency(amount) {
+    if (typeof amount !== 'number') {
+      amount = Number(amount) || 0;
+    }
+    return amount.toLocaleString('de-DE', {
+      style: 'currency',
+      currency: 'EUR',
+      minimumFractionDigits: 2
+    });
+  }
 
-  const subtotalText = (totals.subtotal || 0).toFixed(2).replace('.', ',') + ' €';
-  const shippingText = (totals.shipping || 0).toFixed(2).replace('.', ',') + ' €';
-  const totalText    = (totals.total || 0).toFixed(2).replace('.', ',') + ' €';
+  function formatDate(date) {
+    const d = new Date(date);
+    return d.toLocaleString('de-DE', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
 
-  const addressLines = [
-    `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
-    `${customer.street || ''} ${customer.house || ''}`.trim(),
-    `${customer.zip || ''} ${customer.city || ''}`.trim()
-  ].filter(Boolean).join('\n');
+  const mailPromises = [];
 
-  const subjectCustomer = `Deine Bestellung bei MildAsianFire (#${orderNumber})`;
-  const subjectOwner    = `Neue Bestellung #${orderNumber} – MildAsianFire`;
+  // ---------------------------------------------
+  // 1) Kunden-Mail via SendGrid Dynamic Template
+  // ---------------------------------------------
+  if (customer.email && process.env.SENDGRID_TEMPLATE_ID && process.env.SENDGRID_API_KEY) {
+    const orderItemsForTemplate = items.map(it => ({
+      sku: it.sku,
+      name: it.name,
+      quantity: it.qty,
+      price: formatCurrency(it.price),                  // Einzelpreis in EUR
+      total: formatCurrency((it.price || 0) * it.qty)   // Zeilensumme in EUR
+    }));
 
-  const textBodyCustomer = `
-Hallo ${customer.firstName || ''},
+    const dynamicData = {
+      // Kundendaten
+      first_name: customer.firstName,
+      last_name: customer.lastName,
+      email: customer.email,
+      phone: customer.phone,
+      street: customer.street,
+      house_number: customer.house,
+      zip_code: customer.zip,
+      city: customer.city,
 
-vielen Dank für deine Bestellung bei MildAsianFire!
+      // Bestellung
+      order_number: orderNumber,
+      order_date: formatDate(orderDate || new Date()),
+      order_status: 'NEW',
 
-Bestellnummer: ${orderNumber}
-Interne ID: ${orderId}
+      order_subtotal: formatCurrency(totals.subtotal),
+      order_shipping: formatCurrency(totals.shipping),
+      order_total: formatCurrency(totals.total),
 
-Rechnungs-/Lieferadresse:
-${addressLines || '-'}
+      payment_method: 'OFFLINE',
 
-Bestellte Artikel:
-${itemLines || '-'}
+      // Positionen
+      order_items: orderItemsForTemplate,
 
-Zwischensumme: ${subtotalText}
-Versand:       ${shippingText}
---------------------------
-Gesamt:        ${totalText}
+      // Footer / Links – an deine Domain anpassen
+      link_terms: 'https://mildasianfire.de/index_agb.html',
+      link_imprint: 'https://mildasianfire.de/index_impressum.html',
+      link_privacy: 'https://mildasianfire.de/index_datenschutz.html',
+      link_instagram: 'https://instagram.com/',
+      link_youtube: 'https://youtube.com/',
+      link_pinterest: 'https://pinterest.com/',
+      year: new Date().getFullYear(),
+      support_email: process.env.SHOP_OWNER_EMAIL || 'support@mildasianfire.de'
+    };
 
-Du erhältst eine weitere Nachricht, sobald deine Bestellung versendet wurde.
+    mailPromises.push(
+      sgMail.send({
+        to: customer.email,
+        from,
+        templateId: process.env.SENDGRID_TEMPLATE_ID,
+        dynamic_template_data: dynamicData
+      })
+    );
+  } else {
+    console.warn('Kunden-Mail nicht gesendet (keine Email oder kein SENDGRID_TEMPLATE_ID/SENDGRID_API_KEY).');
+  }
 
-Feurige Grüße
-MildAsianFire
-`.trim();
+  // -------------------------------------------------------
+  // 2) Optionale Text-Mail an Shop-Betreiber via Nodemailer
+  // -------------------------------------------------------
+  const transporter = getTransporter();
+  if (transporter && shopOwnerEmail) {
+    const itemLines = items.map(it =>
+      `- ${it.qty}× ${it.name} (SKU: ${it.sku}) – ${(it.price || 0).toFixed(2).replace('.', ',')} €`
+    ).join('\n');
 
-  const textBodyOwner = `
+    const subtotalText = (totals.subtotal || 0).toFixed(2).replace('.', ',') + ' €';
+    const shippingText = (totals.shipping || 0).toFixed(2).replace('.', ',') + ' €';
+    const totalText    = (totals.total || 0).toFixed(2).replace('.', ',') + ' €';
+
+    const addressLines = [
+      `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+      `${customer.street || ''} ${customer.house || ''}`.trim(),
+      `${customer.zip || ''} ${customer.city || ''}`.trim()
+    ].filter(Boolean).join('\n');
+
+    const subjectOwner = `Neue Bestellung #${orderNumber} – MildAsianFire`;
+
+    const textBodyOwner = `
 Neue Bestellung bei MildAsianFire:
 
 Bestellnummer: ${orderNumber}
@@ -128,15 +195,8 @@ ${itemLines || '-'}
 Zwischensumme: ${subtotalText}
 Versand:       ${shippingText}
 Gesamt:        ${totalText}
-`.trim();
+    `.trim();
 
-  const mailPromises = [];
-
-  // an Kunde, Email senden
-sgMail.send({ templateId, dynamic_template_data: ... })
-
-  // Kopie an Shop-Betreiber
-  if (shopOwnerEmail) {
     mailPromises.push(
       transporter.sendMail({
         from,
@@ -145,14 +205,23 @@ sgMail.send({ templateId, dynamic_template_data: ... })
         text: textBodyOwner
       })
     );
+  } else {
+    console.warn('Shop-Owner-Mail nicht gesendet (kein Transporter oder keine SHOP_OWNER_EMAIL).');
   }
 
+  // ---------------------------------
+  // Mails wirklich senden
+  // ---------------------------------
   try {
-    await Promise.all(mailPromises);
-    console.log('Bestellbestätigungs-Mails erfolgreich gesendet für Order', orderNumber);
+    if (mailPromises.length > 0) {
+      await Promise.all(mailPromises);
+      console.log('Bestellbestätigungs-Mails erfolgreich gesendet für Order', orderNumber);
+    } else {
+      console.warn('sendOrderEmails: Keine Mails zu senden.');
+    }
   } catch (err) {
     console.error('Fehler beim Senden der Bestellbestätigungs-Mail:', err);
-    // aber: Bestellung bleibt gültig, wir werfen hier NICHT weiter
+    // Bestellung bleibt gültig – Fehler wird nur geloggt
   }
 }
 
@@ -270,6 +339,7 @@ app.post('/orders', async (req, res) => {
     );
 
     const orderId = insertOrder.rows[0].id;
+    const orderCreatedAt = insertOrder.rows[0].created_at;
 
     // 3. Positionen + Lagerbestand prüfen/aktualisieren
     const itemsForMail = [];
@@ -365,6 +435,7 @@ app.post('/orders', async (req, res) => {
     sendOrderEmails({
       orderNumber,
       orderId,
+      orderDate: orderCreatedAt,
       customer: {
         firstName,
         lastName,
