@@ -102,16 +102,16 @@ async function sendOrderEmails({ orderNumber, orderId, orderDate, customer, item
   // 1) Kunden-Mail via SendGrid Dynamic Template
   // ---------------------------------------------
   if (customer.email && process.env.SENDGRID_TEMPLATE_ID && process.env.SENDGRID_API_KEY) {
+  
     const orderItemsForTemplate = items.map(it => ({
       sku: it.sku,
       name: it.name,
       quantity: it.qty,
-      price: formatCurrency(it.price),                  // Einzelpreis in EUR
-      total: formatCurrency((it.price || 0) * it.qty)   // Zeilensumme in EUR
+      price: formatCurrency(it.price),
+      total: formatCurrency((it.price || 0) * it.qty)
     }));
 
     const dynamicData = {
-      // Kundendaten
       first_name: customer.firstName,
       last_name: customer.lastName,
       email: customer.email,
@@ -121,7 +121,6 @@ async function sendOrderEmails({ orderNumber, orderId, orderDate, customer, item
       zip_code: customer.zip,
       city: customer.city,
 
-      // Bestellung
       order_number: orderNumber,
       order_date: formatDate(orderDate || new Date()),
       order_status: 'NEW',
@@ -132,10 +131,8 @@ async function sendOrderEmails({ orderNumber, orderId, orderDate, customer, item
 
       payment_method: 'OFFLINE',
 
-      // Positionen
       order_items: orderItemsForTemplate,
 
-      // Footer / Links – an deine Domain anpassen
       link_terms: 'https://mildasianfire.de/index_agb.html',
       link_imprint: 'https://mildasianfire.de/index_impressum.html',
       link_privacy: 'https://mildasianfire.de/index_datenschutz.html',
@@ -143,21 +140,25 @@ async function sendOrderEmails({ orderNumber, orderId, orderDate, customer, item
       link_youtube: 'https://youtube.com/',
       link_pinterest: 'https://pinterest.com/',
       year: new Date().getFullYear(),
-      support_email: process.env.SHOP_OWNER_EMAIL || 'shop@mildasianfire.de'
+      support_email: process.env.SHOP_OWNER_EMAIL || 'support@mildasianfire.de'
     };
+
+    // ***** HIER KOMMT DIE SUBJECT-ZEILE *****
+    const subjectLine = `Deine MildAsianFire Bestellung #${orderNumber}`;
 
     mailPromises.push(
       sgMail.send({
         to: customer.email,
         from,
         templateId: process.env.SENDGRID_TEMPLATE_ID,
+        subject: subjectLine,        // <-- Jetzt wird der Betreff gesetzt!
         dynamic_template_data: dynamicData
       })
     );
-  } else {
-    console.warn('Kunden-Mail nicht gesendet (keine Email oder kein SENDGRID_TEMPLATE_ID/SENDGRID_API_KEY).');
-  }
 
+  } else {
+  console.warn('Kunden-Mail nicht gesendet (keine Email oder kein SENDGRID_TEMPLATE_ID/SENDGRID_API_KEY).');
+  }
   // -------------------------------------------------------
   // 2) Optionale Text-Mail an Shop-Betreiber via Nodemailer
   // -------------------------------------------------------
