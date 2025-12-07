@@ -2,9 +2,12 @@
 import express from 'express';
 import { pool } from './db.js';
 import nodemailer from 'nodemailer';
+import sgMail from '@sendgrid/mail';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // --- CORS erlauben (für dein Browser-Frontend/Admin) ---
 app.use((req, res, next) => {
@@ -53,7 +56,6 @@ function getTransporter() {
 
   return mailTransporter;
 }
-
 
 // ---------------------------------------------
 // Email-Helfer: Bestellbestätigung
@@ -130,17 +132,8 @@ Gesamt:        ${totalText}
 
   const mailPromises = [];
 
-  // an Kunde, falls Email vorhanden
-  if (customer.email) {
-    mailPromises.push(
-      transporter.sendMail({
-        from,
-        to: customer.email,
-        subject: subjectCustomer,
-        text: textBodyCustomer
-      })
-    );
-  }
+  // an Kunde, Email senden
+sgMail.send({ templateId, dynamic_template_data: ... })
 
   // Kopie an Shop-Betreiber
   if (shopOwnerEmail) {
