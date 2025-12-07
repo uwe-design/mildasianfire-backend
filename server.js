@@ -68,7 +68,7 @@ function getTransporter() {
 // - Shop-Owner: Text-Mail via Nodemailer
 // ---------------------------------------------
 async function sendOrderEmails({ orderNumber, orderId, orderDate, customer, items, totals }) {
-  const from = process.env.SMTP_FROM || 'MildAsianFire <no-reply@mildasianfire.de>';
+  const from = process.env.SMTP_FROM || 'MildAsianFire <shop@mildasianfire.de>';
   const shopOwnerEmail = process.env.SHOP_OWNER_EMAIL || from;
 
   // ---------------------------------
@@ -143,7 +143,7 @@ async function sendOrderEmails({ orderNumber, orderId, orderDate, customer, item
       link_youtube: 'https://youtube.com/',
       link_pinterest: 'https://pinterest.com/',
       year: new Date().getFullYear(),
-      support_email: process.env.SHOP_OWNER_EMAIL || 'support@mildasianfire.de'
+      support_email: process.env.SHOP_OWNER_EMAIL || 'shop@mildasianfire.de'
     };
 
     mailPromises.push(
@@ -219,6 +219,7 @@ Gesamt:        ${totalText}
     } else {
       console.warn('sendOrderEmails: Keine Mails zu senden.');
     }
+	
 //  } catch (err) {
 //    console.error('Fehler beim Senden der Bestellbestätigungs-Mail:', err);
     // Bestellung bleibt gültig – Fehler wird nur geloggt
