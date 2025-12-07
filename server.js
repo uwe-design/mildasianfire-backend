@@ -219,10 +219,21 @@ Gesamt:        ${totalText}
     } else {
       console.warn('sendOrderEmails: Keine Mails zu senden.');
     }
-  } catch (err) {
-    console.error('Fehler beim Senden der Bestellbestätigungs-Mail:', err);
+//  } catch (err) {
+//    console.error('Fehler beim Senden der Bestellbestätigungs-Mail:', err);
     // Bestellung bleibt gültig – Fehler wird nur geloggt
+//  }
+  
+} catch (err) {
+  console.error('Fehler beim Senden der Bestellbestätigungs-Mail:', err);
+
+  if (err.response && err.response.body && err.response.body.errors) {
+    console.error('SendGrid-Fehlerdetails:', JSON.stringify(err.response.body.errors, null, 2));
   }
+  // Bestellung bleibt gültig – Fehler wird nur geloggt
+} 
+  
+  
 }
 
 // ---------------------------------------------
