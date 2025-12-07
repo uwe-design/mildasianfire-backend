@@ -1,12 +1,16 @@
 {
   "name": "mildasianfire-backend",
   "version": "1.0.0",
-  "type": "module",  
+  "type": "module",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "express": "^4.22.1",
+    "nodemailer": "^6.10.1",
+    "pg": "^8.16.3"
   }
 }
