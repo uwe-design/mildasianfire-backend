@@ -1,7 +1,7 @@
 // server.js
 import express from 'express';
 import { pool } from './db.js';
-import nodemailer from 'nodemailer';
+//import nodemailer from 'nodemailer';
 import sgMail from '@sendgrid/mail';
 
 const app = express();
